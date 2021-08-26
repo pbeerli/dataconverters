@@ -1,0 +1,333 @@
+#!/usr/bin/env python
+#
+# converts a migrate file into ima
+# mig2ima treestring infile outfile
+#
+from __future__ import print_function
+from __future__ import division
+#from __future__ import unicode_literals
+import sys
+import migread as mr
+
+def help():
+    print( "Syntax: mig2other <-ima | -mist | -bpp | -lamarc > migrateinputfile convertedfile <guidetree>")
+    print( "Default is conversion for ima or using the -ima option")
+    print( "        -mist converts the input for the program MIST (Chung and Hey 2017)")
+    print( "        -bpp converts the input for the program BPP (Yang and Rannala)")
+    print( "        -lamarc converts the input for the program LAMARC (Kuhner)")
+    sys.exit()
+
+
+def chunk(in_string,num_chunks):
+    chunk_size = len(in_string)//num_chunks
+    if len(in_string) % num_chunks: chunk_size += 1
+    iterator = iter(in_string)
+    for _ in range(num_chunks):
+        accumulator = list()
+        for _ in range(chunk_size):
+            try: accumulator.append(next(iterator))
+            except StopIteration: break
+        yield ''.join(accumulator)
+
+
+def fprintf(outfile, format, *args):
+    outfile.write(format % args)
+
+def convert2ima(outfile, popnum, missing, tree, loci, populations):
+    fprintf(outfile,"Simulated data generated with migtree and migdata [IMA style]\n")
+    fprintf(outfile,"# assumed that migrate infile is --modern\n") 
+    fprintf(outfile,"# the population tree may needs to be fixed\n")
+    fprintf(outfile,"%li\n",popnum-missing)
+    for pop in range(popnum-missing):
+        fprintf(outfile,"pop%li ",pop)
+    fprintf(outfile,"\n")
+    fprintf(outfile,"%s\n",tree)
+    fprintf(outfile,"%li\n",loci)
+    for locus in range(loci):
+        fprintf(outfile,"Locus%li ",locus)
+        for pop in range(popnum-missing):
+            fprintf(outfile,"%li ",len(populations[pop]))
+            seq = populations[pop][0][1].translate(None, '!@#$0123456789\n ')
+            s = list(chunk(seq,loci))
+        fprintf(outfile,"%li H 1\n",len(s[locus]))
+        for pop in range(popnum-missing):
+            for ind in range(len(populations[pop])): 
+                fprintf (outfile, "%-10.10s", populations[pop][ind][0])
+                seq = populations[pop][ind][1].translate(None, '!@#$0123456789\n ')
+                s = list(chunk(seq,loci))
+                fprintf (outfile,"%s\n",s[locus])
+    fprintf (outfile,"\n")
+
+def convert2mist(outfile, popnum, missing, loci, populations):
+    #fprintf(outfile,"# MIST data generated from a migrate input file using mig2ima\n")
+    #fprintf(outfile,"# assumed that migrate infile is --modern\n") 
+    #fprintf(outfile,"# the population tree may needs to be fixed\n")
+    total = 0
+    for pop in range(popnum-missing):
+        total += len(populations[pop])
+    fprintf(outfile,"%li %li\n", total, loci)
+
+    for locus in range(loci):
+        seq = populations[pop][0][1].translate(None, '!@#$0123456789\n ')
+        s = list(chunk(seq,loci))
+        fprintf(outfile,"%li H\n",len(s[locus]))
+        for pop in range(popnum-missing):
+            for ind in range(len(populations[pop])): 
+                fprintf (outfile, "%li %li ",pop, ind)
+                seq = populations[pop][ind][1].translate(None, '!@#$0123456789\n ')
+                s = list(chunk(seq,loci))
+                fprintf (outfile,"%s\n",s[locus])
+    fprintf (outfile,"\n")
+
+def convert2bpp(outfile, imap, popnum, missing, loci, populations):
+    # over all loci
+    for locus in range(loci):
+        # over all populations first to find number of individuals
+        numind = 0
+        for pop in range(popnum-missing):
+            numind += len(populations[pop])
+        fprintf(outfile,"%li   ",numind)
+        seq = populations[0][0][1].translate(None, '!@#$0123456789\n ')
+        s = list(chunk(seq,loci))
+        fprintf(outfile,"%li\n\n",len(s[locus]))
+        #over all populations to print individuals for locus
+        for pop in range(popnum-missing):
+            # over all individuals in population pop
+            for ind in range(len(populations[pop])): 
+                fprintf (outfile, "%s^%li   ", populations[pop][ind][0].strip(), pop)
+                seq = populations[pop][ind][1].translate(None, '!@#$0123456789\n ')
+                s = list(chunk(seq,loci))
+                fprintf (outfile,"%s\n",s[locus])
+        fprintf (outfile,"\n")
+        
+    for pop in range(popnum-missing):
+        fprintf(imap,"%li  %li\n",pop,pop)
+    
+
+def bpp_cntl(cntl,seqfile,imapfile,outfile,mcmcfile):
+    a = """
+          seed = 123
+
+       seqfile = {0}
+      Imapfile = {1}
+       outfile = {2}
+      mcmcfile = {3}
+
+ speciesdelimitation = 0 * fixed species tree
+* speciesdelimitation = 1 0 2    * speciesdelimitation algorithm0(e)
+* speciesdelimitation = 1 1 2 1   * speciesdelimitation algorithm1(a m)
+    speciestree = 0 * species tree fixed
+*    speciestree = 1  0.4 0.2 0.9   * speciestree pSlider ExpandRatio ShrinkRatio
+
+*   speciesmodelprior = 1  * 0: uniform LH; 1:uniform rooted trees; 2: uniformSLH; 3: uniformSRooted 
+
+  species&tree = 2  A  B
+                    20 20
+                  (A, B);
+
+       usedata = 1    * 0: no data (prior); 1:seq like
+         nloci = 10   * 1000    * number of data sets in seqfile
+
+     cleandata = 0    * remove sites with ambiguity data (1:yes, 0:no)?
+
+    thetaprior = 3 0.4   # invgamma(a, b) for theta
+      tauprior = 3 0.2    # invgamma(a, b) for root tau & Dirichlet(a) for other tau's
+
+*     locusrate = 0 2.0   # (0: No variation, 1: estimate, 2: from file) & a_Dirichlet (if 1)
+*      heredity = 0 4 4   # (0: No variation, 1: estimate, 2: from file) & a_gamma b_gamma (if 1)
+* sequenceerror = 0 0 0 0 0 : 0.05 1   # sequencing errors: gamma(a, b) prior
+
+       finetune = 1: 1 0.002 0.01 0.01 0.02 0.005 1.0  # finetune for GBtj, GBspr, theta, tau, mix, locusrate, seqerr
+
+         print = 1 0 0 0   * MCMC samples, locusrate, heredityscalars Genetrees
+        burnin = 4000
+      sampfreq = 2
+       nsample = 200000
+
+    """.format(seqfile,imapfile,outfile,mcmcfile)
+    fprintf(cntl,"%s",a)
+    
+
+def convert2lamarc(outfile, inputfile, popnum, missing, tree, loci, populations):
+    fprintf(outfile,'<?xml version="1.0" ?>\n<!--\ndata converted from migrate data format to lamarc\n')
+    fprintf(outfile," assumed that migrate infile is {double hyphen}modern\n") 
+    fprintf(outfile," works for two populations sampled\n-->\n")
+    fprintf(outfile,"%s\n",lamarc_xml_header())
+    fprintf(outfile,"<data>")
+    popnames = map(str,range(1,popnum+1))
+    for locus in range(loci):
+        fprintf(outfile,'<region name="from %s %li">',inputfile,locus)
+        fprintf(outfile,'<spacing>')
+        fprintf(outfile,'<block name="segment 1 of %s %li" />\n',inputfile,locus)
+        fprintf(outfile,'</spacing>')    
+        for pop in range(popnum-missing):
+            fprintf(outfile,'<population name="%s">\n',popnames[pop])
+            for ind in range(len(populations[pop])): 
+                seq = populations[pop][ind][1].translate(None, '!@#$0123456789\n ')
+                s = list(chunk(seq,loci))
+                indname = populations[pop][ind][0]
+                fprintf(outfile,'<individual name="%s">\n',indname.strip())
+                fprintf(outfile,'<sample name="%s_0">\n',indname.strip())
+                fprintf(outfile,'<datablock type="DNA"> %s </datablock>\n',s[locus])
+                fprintf(outfile,'</sample>\n </individual>\n')
+            fprintf(outfile,'</population>\n')
+        fprintf(outfile,'</region>\n')
+    fprintf(outfile,'</data>\n')
+    fprintf(outfile,'</lamarc>\n')
+    fprintf (outfile,"\n")
+    
+
+def lamarc_xml_header():
+    return '''
+    <lamarc version="2.1.10">
+    <chains>
+    <replicates>1</replicates>
+    <bayesian-analysis>Yes</bayesian-analysis>
+    <heating>
+    <adaptive>false</adaptive>
+      <temperatures> 1</temperatures>
+      <swap-interval>10</swap-interval>
+    </heating>
+    <strategy>
+      <resimulating>0.3125</resimulating>
+      <tree-size>0.0625</tree-size>
+      <haplotyping>0</haplotyping>
+      <trait-arranger>0</trait-arranger>
+      <epoch-size>0.3125</epoch-size>
+      <bayesian>0.3125</bayesian>
+    </strategy>
+    <initial>
+      <number>10</number>
+      <samples>500</samples>
+      <discard>1000</discard>
+      <interval>100</interval>
+    </initial>
+    <final>
+      <number>2</number>
+      <samples>100000</samples>
+      <discard>1000</discard>
+      <interval>100</interval>
+    </final>
+  </chains>
+  <format>
+    <convert-output-to-eliminate-zero> Yes </convert-output-to-eliminate-zero>
+
+    <!-- The tag below documents the seed used for this run. -->
+    <!-- It is ignored if you use this file as lamarc input -->
+    <seed-from-system-clock>1516940797</seed-from-system-clock>
+
+    <verbosity>normal</verbosity>
+    <progress-reports>none</progress-reports>
+    <results-file>outfile.txt</results-file>
+    <use-in-summary>false</use-in-summary>
+    <in-summary-file>insumfile.xml</in-summary-file>
+    <use-out-summary>false</use-out-summary>
+    <out-summary-file>outsumfile.xml</out-summary-file>
+    <use-curvefiles>true</use-curvefiles>
+    <curvefile-prefix>curvefile</curvefile-prefix>
+    <use-reclocfile>false</use-reclocfile>
+    <reclocfile-prefix>reclocfile</reclocfile-prefix>
+    <use-tracefile>true</use-tracefile>
+    <tracefile-prefix>tracefile</tracefile-prefix>
+    <use-newicktreefile>false</use-newicktreefile>
+    <newicktreefile-prefix>newick</newicktreefile-prefix>
+    <out-xml-file>menusettings_infile.xml</out-xml-file>
+    <xml-report-file>report.xml</xml-report-file>
+    <profile-prefix>profile</profile-prefix>
+    </format>
+    <forces>
+        <divergence-migration>
+            <start-values> 0 50.000000 0 50.000000 0 0 0 0 0 </start-values>
+            <method> USER USER USER USER USER USER USER USER USER </method>
+            <max-events> 10000 </max-events>
+            <profiles> None None None None None None None None None </profiles>
+            <constraints> Invalid Unconstrained Invalid Unconstrained Invalid Invalid Invalid Invalid Invalid </constraints>
+            <prior type="linear">
+                <paramindex> default </paramindex>
+                <lower> 0.0 </lower>
+                <upper> 100.0 </upper>
+            </prior>
+        </divergence-migration>
+        <divergence>
+            <prior type="linear">
+                <paramindex> default </paramindex>
+                <lower> 0.0 </lower>
+                <upper> 0.2 </upper>
+            </prior>
+            <method>  USER </method>
+            <start-values>  0.002000 </start-values>
+            <population-tree>
+                <epoch-boundary>
+                    <new-populations> 1 2 </new-populations>
+                    <ancestor> Parent_1 </ancestor>
+                </epoch-boundary>
+            </population-tree>
+        </divergence>
+    </forces>
+    '''
+    
+
+    
+    
+if __name__ == '__main__':
+    convertima = True #default convert to ima
+    convertbpp = False
+    convertmist = False
+    convertlamarc = False
+    if "-h" in sys.argv or "--help" in sys.argv:
+        help()
+    if "-ima" in sys.argv: # convert to ima input file
+        convertima=True
+        ii = sys.argv.index('-ima')
+        sys.argv.pop(ii)
+    if "-mist" in sys.argv: # convert to mist input file
+        convertmist=True
+        convertima=False
+        ii = sys.argv.index('-mist')
+        sys.argv.pop(ii)
+    if "-bpp" in sys.argv: # convert to mist input file
+        convertbpp=True
+        convertima=False
+        ii = sys.argv.index('-bpp')
+        sys.argv.pop(ii)
+        seqfile = sys.argv[2]
+    if "-lamarc" in sys.argv: # convert to ima input file
+        convertlamarc=True
+        convertima=False
+        ii = sys.argv.index('-lamarc')
+        sys.argv.pop(ii)
+    print(sys.argv)
+    inputfile = sys.argv[1]
+    outfile = open(sys.argv[2],'w')
+
+    if convertbpp:
+        imap = open(sys.argv[2]+".imap","w")
+        imapfile=sys.argv[2]+".imap"
+        outfilet = sys.argv[2]+".out"
+        mcmcfile = sys.argv[2]+".mcmc"
+        cntlfile = sys.argv[2]+".cntl"
+        cntl = open(cntlfile,'w')
+    data = mr.reader(inputfile)
+    if len(sys.argv) > 3:
+        tree = sys.argv[3]
+    else:
+        tree = "(0,1):2"
+
+    populations, title = mr.split_migrate(data)    
+    popnum, loci = mr.get_header(data)
+    # how many empty populations
+    numinds = [len(populations[pop]) for pop in range(popnum)]
+    #print numinds
+    missing = len(filter(lambda x: x==0,numinds))
+    #print missing
+
+    #conversion to ima
+    if convertima:
+        convert2ima(outfile, popnum, missing, tree, loci, populations)
+    elif convertmist: #convert to mist
+        convert2mist(outfile, popnum, missing, loci, populations)
+    elif convertbpp: #convert to bpp
+        convert2bpp(outfile, imap, popnum, missing, loci, populations)
+        bpp_cntl(cntl, seqfile,imapfile, outfilet,mcmcfile)
+    else: 
+        convert2lamarc(outfile, inputfile, popnum, missing, tree, loci, populations)
