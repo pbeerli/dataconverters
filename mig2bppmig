@@ -1,0 +1,215 @@
+#!/usr/bin/env python
+#
+# converts a migrate file into ima
+# mig2ima treestring infile outfile
+#
+from __future__ import print_function
+from __future__ import division
+#from __future__ import unicode_literals
+import sys
+import migread as mr
+import random
+
+def help():
+    print( "Syntax: mig2other <-ima | -mist | -bpp > migrateinputfile convertedfile <guidetree>")
+    print( "Default is conversion for ima or using the -ima option")
+    print( "        -mist converts the input for the program MIST (Chung and Hey 2017)")
+    print( "        -bpp converts the input for the program BPP (Yang and Rannala)")
+    sys.exit()
+
+
+def chunk(in_string,num_chunks):
+    chunk_size = len(in_string)//num_chunks
+    if len(in_string) % num_chunks: chunk_size += 1
+    iterator = iter(in_string)
+    for _ in range(num_chunks):
+        accumulator = list()
+        for _ in range(chunk_size):
+            try: accumulator.append(next(iterator))
+            except StopIteration: break
+        yield ''.join(accumulator)
+
+
+def fprintf(outfile, format, *args):
+    outfile.write(format % args)
+
+def convert2ima(outfile, popnum, missing, tree, loci, populations):
+    fprintf(outfile,"Simulated data generated with migtree and migdata [IMA style]\n");
+    fprintf(outfile,"# assumed that migrate infile is --modern\n") 
+    fprintf(outfile,"# the population tree may needs to be fixed\n");
+    fprintf(outfile,"%li\n",popnum-missing)
+    for pop in range(popnum-missing):
+        fprintf(outfile,"pop%li ",pop);
+    fprintf(outfile,"\n")
+    fprintf(outfile,"%s\n",tree);
+    fprintf(outfile,"%li\n",loci)
+    trantab = str.maketrans(dict.fromkeys('!@#$0123456789\n '))
+    for locus in range(loci):
+        fprintf(outfile,"Locus%li ",locus);
+        for pop in range(popnum-missing):
+            fprintf(outfile,"%li ",len(populations[pop]))
+            seq = populations[pop][0][1].translate(trantab)
+            s = list(chunk(seq,loci))
+        fprintf(outfile,"%li H 1\n",len(s[locus]))
+        for pop in range(popnum-missing):
+            for ind in range(len(populations[pop])): 
+                fprintf (outfile, "%-10.10s", populations[pop][ind][0])
+                seq = populations[pop][ind][1].translate(trantab)
+                s = list(chunk(seq,loci))
+                fprintf (outfile,"%s\n",s[locus])
+    fprintf (outfile,"\n")
+
+def convert2mist(outfile, popnum, missing, loci, populations):
+    #fprintf(outfile,"# MIST data generated from a migrate input file using mig2ima\n");
+    #fprintf(outfile,"# assumed that migrate infile is --modern\n") 
+    #fprintf(outfile,"# the population tree may needs to be fixed\n");
+    total = 0
+    for pop in range(popnum-missing):
+        total += len(populations[pop])
+    fprintf(outfile,"%li %li\n", total, loci)
+    trantab = str.maketrans(dict.fromkeys('!@#$0123456789\n '))
+    for locus in range(loci):
+        seq = populations[pop][0][1].translate(trantab)
+        s = list(chunk(seq,loci))
+        fprintf(outfile,"%li H\n",len(s[locus]))
+        for pop in range(popnum-missing):
+            for ind in range(len(populations[pop])): 
+                fprintf (outfile, "%li %li ",pop, ind)
+                seq = populations[pop][ind][1].translate(trantab)
+                s = list(chunk(seq,loci))
+                fprintf (outfile,"%s\n",s[locus])
+    fprintf (outfile,"\n")
+
+def convert2bpp(outfile, imap, popnum, missing, loci, populations,locations):
+    # over all loci
+    for locus in range(loci):
+        # over all populations first to find number of individuals
+        numind = 0
+        trantab = str.maketrans(dict.fromkeys('!@#$0123456789\n '))
+        for pop in range(popnum-missing):
+            numind += len(populations[pop])
+        fprintf(outfile,"%li   ",numind)
+        seq = populations[0][0][1].translate(trantab)
+        s = list(chunk(seq,loci))
+        fprintf(outfile,"%li\n\n",len(s[locus]))
+        #over all populations to print individuals for locus
+        for pop in range(popnum-missing):
+            # over all individuals in population pop
+            for ind in range(len(populations[pop])): 
+                fprintf (outfile, "%s^%li   ", populations[pop][ind][0].strip(), pop)
+                seq = populations[pop][ind][1].translate(trantab)
+                s = list(chunk(seq,loci))
+                fprintf (outfile,"%s\n",s[locus])
+        fprintf (outfile,"\n")
+
+    poplabels=["A","B","C","D"]
+    for pop in range(popnum-missing):
+        fprintf(imap,"%li  %s\n",pop,poplabels[pop])
+        #fprintf(imap,"%li  %s\n",pop,locations[pop])
+    
+
+def bpp_cntl(cntl,seqfile,imapfile,outfile,mcmcfile,ranseed,locations,numinds,loci):
+    a = f"""
+          seed = {ranseed}
+
+       seqfile = {seqfile}
+      Imapfile = {imapfile}
+       outfile = {outfile}
+      mcmcfile = {mcmcfile}
+
+ speciesdelimitation = 0 * fixed species tree
+* speciesdelimitation = 1 0 2    * speciesdelimitation algorithm0(e)
+* speciesdelimitation = 1 1 2 1   * speciesdelimitation algorithm1(a m)
+    speciestree = 0 * species tree fixed
+*    speciestree = 1  0.4 0.2 0.9   * speciestree pSlider ExpandRatio ShrinkRatio
+    phiprior = 0.1 1
+*   speciesmodelprior = 1  * 0: uniform LH; 1:uniform rooted trees; 2: uniformSLH; 3: uniformSRooted 
+
+  species&tree = 2  {locations[0]}  {locations[1]}
+                    {numinds[0]} {numinds[0]}
+                  (({locations[0]},Y[&phi=0.1])X, ({locations[1]},X[&phi=0.1])Y)R;
+#  migration = 3
+#              A   B    AB
+#       A      0   1.0  0
+#       B      1.0 0    0
+#       AB     0   0    0
+
+       usedata = 1    * 0: no data (prior); 1:seq like
+         nloci = {loci}   * 1000    * number of data sets in seqfile
+
+     cleandata = 0    * remove sites with ambiguity data (1:yes, 0:no)?
+
+    thetaprior = 3 0.4   # invgamma(a, b) for theta
+      tauprior = 3 0.2    # invgamma(a, b) for root tau & Dirichlet(a) for other tau's
+
+*     locusrate = 0 2.0   # (0: No variation, 1: estimate, 2: from file) & a_Dirichlet (if 1)
+*      heredity = 0 4 4   # (0: No variation, 1: estimate, 2: from file) & a_gamma b_gamma (if 1)
+* sequenceerror = 0 0 0 0 0 : 0.05 1   # sequencing errors: gamma(a, b) prior
+
+       finetune = 1: 1 0.002 0.01 0.01 0.02 0.005 1.0  # finetune for GBtj, GBspr, theta, tau, mix, locusrate, seqerr
+
+         print = 1 0 0 0   * MCMC samples, locusrate, heredityscalars Genetrees
+        burnin = 4000
+      sampfreq = 2
+       nsample = 200000
+
+    """
+    fprintf(cntl,"%s",a)
+    
+
+    
+if __name__ == '__main__':
+    convertima = False  #no default allowed
+    convertbpp = False 
+    convertmist = False
+    if "-h" in sys.argv or "--help" in sys.argv:
+        help()
+    if "-ima" in sys.argv: # convert to ima input file
+        convertima=True
+        ii = sys.argv.index('-ima')
+        sys.argv.pop(ii)
+    if "-mist" in sys.argv: # convert to mist input file
+        convertmist=True
+        convertima=False
+        ii = sys.argv.index('-mist')
+        sys.argv.pop(ii)
+    if "-bpp" in sys.argv: # convert to bpp input file
+        convertbpp=True
+        convertima=False
+        ii = sys.argv.index('-bpp')
+        sys.argv.pop(ii)
+        seqfile = sys.argv[2]
+    print(sys.argv)
+    outfile = open(sys.argv[2],'w')
+
+    if convertbpp:
+        imap = open(sys.argv[2]+"mig.imap","w")
+        imapfile=sys.argv[2]+"mig.imap"
+        outfilet = sys.argv[2]+"mig.out"
+        mcmcfile = sys.argv[2]+"mig.mcmc"
+        cntlfile = sys.argv[2]+"mig.cntl"
+        cntl = open(cntlfile,'w')
+    data = mr.reader(sys.argv[1])
+    if len(sys.argv) > 3:
+        tree = sys.argv[3]
+    else:
+        tree = "(0,1):2"
+
+    populations, title, locations = mr.split_migrate(data)
+    popnum, loci = mr.get_header(data)
+    # how many empty populations
+    numinds = [len(populations[pop]) for pop in range(popnum)]
+    #print numinds
+    missing = len(list(filter(lambda x: x==0,numinds)))
+    #print missing
+
+    #conversion to ima
+    if convertima:
+        convert2ima(outfile, popnum, missing, tree, loci, populations)
+    elif convertmist:
+        convert2mist(outfile, popnum, missing, loci, populations)
+    else:
+        convert2bpp(outfile, imap, popnum, missing, loci, populations,locations)
+        ranseed = random.randint(1,100000)
+        bpp_cntl(cntl, seqfile,imapfile, outfilet,mcmcfile,ranseed,["A","B"],numinds,loci)
+

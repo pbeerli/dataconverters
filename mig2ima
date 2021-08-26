@@ -1,0 +1,117 @@
+#!/usr/bin/env python
+#
+# converts a migrate file into ima
+# mig2ima treestring infile outfile
+#
+from __future__ import print_function
+from __future__ import division
+#from __future__ import unicode_literals
+import sys
+import migread as mr
+#import string
+
+def help():
+    print( "Syntax: mig2ima <-ima | -mist> migrateinputfile imaconvertedfile <guidetree>")
+    print( "Default is conversion for ima or using the -ima option")
+    print( "        -mist converts the input for the program MIST (Chung and Hey 2017)")
+    sys.exit()
+
+
+def chunk(in_string,num_chunks):
+    chunk_size = len(in_string)//num_chunks
+    if len(in_string) % num_chunks: chunk_size += 1
+    iterator = iter(in_string)
+    for _ in range(num_chunks):
+        accumulator = list()
+        for _ in range(chunk_size):
+            try: accumulator.append(next(iterator))
+            except StopIteration: break
+        yield ''.join(accumulator)
+
+
+def fprintf(outfile, format, *args):
+    outfile.write(format % args)
+
+def convert2ima(outfile, popnum, missing, tree, loci, populations):
+    fprintf(outfile,"Simulated data generated with migtree and migdata [IMA style]\n");
+    fprintf(outfile,"# assumed that migrate infile is --modern\n") 
+    fprintf(outfile,"# the population tree may needs to be fixed\n");
+    fprintf(outfile,"%li\n",popnum-missing)
+    for pop in range(popnum-missing):
+        fprintf(outfile,"pop%li ",pop);
+    fprintf(outfile,"\n")
+    fprintf(outfile,"%s\n",tree);
+    fprintf(outfile,"%li\n",loci)
+    trantab = str.maketrans(dict.fromkeys('!@#$0123456789\n '))
+    for locus in range(loci):
+        fprintf(outfile,"Locus%li ",locus);
+        for pop in range(popnum-missing):
+            fprintf(outfile,"%li ",len(populations[pop]))
+
+            seq = populations[pop][0][1].translate(trantab)
+            s = list(chunk(seq,loci))
+        fprintf(outfile,"%li H 1\n",len(s[locus]))
+        for pop in range(popnum-missing):
+            for ind in range(len(populations[pop])): 
+                fprintf (outfile, "%-10.10s", populations[pop][ind][0])
+                seq = populations[pop][ind][1].translate(trantab)
+                s = list(chunk(seq,loci))
+                fprintf (outfile,"%s\n",s[locus])
+    fprintf (outfile,"\n")
+
+def convert2mist(outfile, popnum, missing, loci, populations):
+    fprintf(outfile,"# MIST data generated from a migrate input file using mig2ima\n");
+    fprintf(outfile,"# assumed that migrate infile is --modern\n") 
+    fprintf(outfile,"# the population tree may needs to be fixed\n");
+    total = 0
+    for pop in range(popnum-missing):
+        total += len(populations[pop])
+    fprintf(outfile,"%li %li\n", total, loci)
+
+    for locus in range(loci):
+        seq = populations[pop][0][1].translate(None, '!@#$0123456789\n ')
+        s = list(chunk(seq,loci))
+        fprintf(outfile,"%li H\n",len(s[locus]))
+        for pop in range(popnum-missing):
+            for ind in range(len(populations[pop])): 
+                fprintf (outfile, "%li %li ",pop, ind)
+                seq = populations[pop][ind][1].translate(None, '!@#$0123456789\n ')
+                s = list(chunk(seq,loci))
+                fprintf (outfile,"%s\n",s[locus])
+    fprintf (outfile,"\n")
+
+    
+if __name__ == '__main__':
+    convertima=True #default convert to ima
+    if "-h" in sys.argv or "--help" in sys.argv:
+        help()
+    if "-ima" in sys.argv: # convert to ima input file
+        convertima=True
+        ii = sys.argv.index('-ima')
+        sys.argv.pop(ii)
+    if "-mist" in sys.argv: # convert to mist input file
+        convertima=False
+        ii = sys.argv.index('-mist')
+        sys.argv.pop(ii)
+    print(sys.argv)
+    outfile = open(sys.argv[2],'w')
+    data = mr.reader(sys.argv[1])
+    if len(sys.argv) > 3:
+        tree = sys.argv[3]
+    else:
+        tree = "(0,1):2"
+    populations, title, locations = mr.split_migrate(data)
+    popnum, loci = mr.get_header(data)
+    # how many empty populations
+    numinds = [len(populations[pop]) for pop in range(popnum)]
+    #print numinds
+    missing = len(list(filter(lambda x: x==0,numinds)))
+    #print missing
+
+    #conversion to ima
+    if convertima:
+        convert2ima(outfile, popnum, missing, tree, loci, populations)
+    else:
+        convert2mist(outfile, popnum, missing, loci, populations)
+
+
