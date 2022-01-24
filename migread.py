@@ -15,9 +15,8 @@ def reader(filename):
     return data
 
 def readpop(data,pop):
-    #print("@data",data)
     numind, poptitle = data[0].split(None,1)
-    print (numind,poptitle)
+    #print numind,poptitle
     p = []
     for i in range(1,int(numind)+1):
         #print i,data[i][:10]
@@ -42,8 +41,8 @@ def split_migrate1(data):
     else:
         title = " "
     sitesline = newdata[1]
-    #print (numpop,'@',loci,'@',title)
-    #print (sitesline)
+    print (numpop,'@',loci,'@',title)
+    print (sitesline)
     if sitesline[0] != '(':
         print ('failed')
         exit(-1)
@@ -87,6 +86,11 @@ if __name__ == '__main__':
     data = reader(sys.argv[1])
     #print data
     populations,title,locations = split_migrate(data)
-    print (populations)
-    print(locations)
-
+    #print (populations)
+    #print(locations)
+    import numpy as np
+    populations = np.array(populations)
+    for pop in populations:
+        a = pop[:,1]
+        print(len(a))
+        
